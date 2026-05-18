@@ -14,10 +14,6 @@ const setupRoutes = require('./routes/setup');
 const { isAuthenticated } = require('./routes/auth');
 const mistralOcrService = require('./services/mistralOcrService');
 const reconciliationService = require('./services/reconciliationService');
-
-// Add environment variables for RAG service if not already set
-process.env.RAG_SERVICE_URL = process.env.RAG_SERVICE_URL || 'http://localhost:8000';
-process.env.RAG_SERVICE_ENABLED = process.env.RAG_SERVICE_ENABLED || 'true';
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const { doubleCsrf } = require('csrf-csrf');
@@ -209,10 +205,6 @@ const retryTracker = new Map();
 // Configurable minimum content length (default: 10 characters)
 const MIN_CONTENT_LENGTH = parseInt(process.env.MIN_CONTENT_LENGTH || '10', 10);
 
-function isChatEnabled() {
-  return process.env.RAG_SERVICE_ENABLED === 'true';
-}
-
 
 const corsOptions = {
   origin: true,
@@ -230,7 +222,7 @@ const apiGlobalLimiter = rateLimit({
   max: config.globalRateLimitMax,
   message: {
     success: false,
-    error: 'Zu viele Anfragen. Bitte versuchen Sie es später erneut.'
+    error: 'Too many requests. Please try again later.'
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -260,15 +252,9 @@ const apiGlobalLimiter = rateLimit({
 
 app.use(cors(corsOptions));
 
+// Chrome Private Network Access: respond to preflight with the required header
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, x-api-key, Access-Control-Allow-Private-Network');
   res.header('Access-Control-Allow-Private-Network', 'true');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
   next();
 });
 
@@ -278,11 +264,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
 app.use((req, res, next) => {
+  const themeCookie = req.cookies?.theme;
+  const resolvedTheme = themeCookie === 'dark' ? 'dark' : 'light';
+  res.locals.theme = resolvedTheme;
   res.locals.appVersion = config.PAPERLESS_AI_VERSION || 'unknown';
   res.locals.appCommitSha = process.env.PAPERLESS_AI_COMMIT_SHA || 'unknown';
   res.locals.appPaperlessNgxVersion = process.env.PAPERLESS_NGX_VERSION || 'unknown';
   res.locals.appAiProvider = config.aiProvider || process.env.AI_PROVIDER || 'openai';
-  res.locals.appRagEnabled = process.env.RAG_SERVICE_ENABLED === 'true';
   res.locals.appOcrEnabled = config.mistralOcr?.enabled === 'yes';
   res.locals.appNodeEnv = process.env.NODE_ENV || 'production';
   res.locals.appNodeVersion = process.version;
@@ -391,7 +379,7 @@ app.use((req, res, next) => {
   });
 });
 
-app.use(['/api', '/chat', '/manual'], apiGlobalLimiter);
+app.use(['/api', '/manual'], apiGlobalLimiter);
 
 const isApiDocsEnabled = config.exposeApiDocs === 'yes';
 let swaggerSpec = null;
@@ -917,59 +905,6 @@ async function scanDocuments(source = 'scheduler') {
 
 // Routes
 app.use('/', setupRoutes);
-const ragRoutes = require('./routes/rag');
-
-// Mount RAG routes if enabled
-if (process.env.RAG_SERVICE_ENABLED === 'true') {
-  app.use('/api/rag', isAuthenticated, ragRoutes);
-
-  /**
-   * @swagger
-   * /rag:
-   *   get:
-   *     summary: RAG chat interface page
-   *     description: Renders the RAG interface for asking questions against indexed documents.
-   *     tags:
-   *       - Navigation
-   *       - RAG
-   *     security:
-   *       - BearerAuth: []
-   *       - ApiKeyAuth: []
-   *     responses:
-   *       200:
-   *         description: RAG page rendered successfully
-   *         content:
-   *           text/html:
-   *             schema:
-   *               type: string
-   *       500:
-   *         description: Server error
-   */
-  
-  // RAG UI route
-  app.get('/rag', isAuthenticated, async (req, res) => {
-    try {
-      let paperlessUrl = '';
-      try {
-        paperlessUrl = await paperlessService.getPublicBaseUrl();
-      } catch (error) {
-        console.warn('[WARN] Unable to resolve Paperless public URL for RAG links:', error.message);
-      }
-
-      res.render('rag', { 
-        title: 'Ask your documents - RAG Interface',
-        version: config.PAPERLESS_AI_VERSION || ' ',
-        paperlessUrl,
-        ragEnabled: true,
-        chatEnabled: isChatEnabled()
-      });
-    } catch (error) {
-      console.error(`Error rendering RAG UI: ${error.message}`);
-      console.debug(error);
-      res.status(500).send('Error loading RAG interface');
-    }
-  });
-}
 
 /**
  * @swagger

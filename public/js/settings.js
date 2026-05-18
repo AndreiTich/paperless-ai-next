@@ -32,6 +32,8 @@ class SettingsTabsManager {
             const isActive = content.id === tabId;
             content.classList.toggle('hidden', !isActive);
         });
+
+        refreshSettingsHints();
     }
 }
 
@@ -192,6 +194,8 @@ class FormManager {
                 azureApiVersion.required = true;
                 break;
         }
+
+        refreshSettingsHints();
     }
 
     // Rest of the class methods remain the same
@@ -225,6 +229,8 @@ class FormManager {
         } else {
             aiTagNameSection.classList.add('hidden');
         }
+
+        refreshSettingsHints();
     }
 
     togglePromptTagsInput() {
@@ -242,6 +248,8 @@ class FormManager {
             promptTagsSection.classList.add('hidden');
             this.enablePromptElements();
         }
+
+        refreshSettingsHints();
     }
 
     disablePromptElements() {
@@ -844,58 +852,6 @@ function initializeFormHandlers() {
         });
     }
 
-    const forceModelRedownloadBtn = document.getElementById('forceModelRedownloadBtn');
-    if (forceModelRedownloadBtn) {
-        forceModelRedownloadBtn.addEventListener('click', async () => {
-            const confirmResult = await Swal.fire({
-                icon: 'warning',
-                title: 'Force model re-download?',
-                text: 'This clears the local model cache and re-downloads RAG models. Existing requests may be delayed while models are reinitialized.',
-                showCancelButton: true,
-                confirmButtonColor: '#d97706',
-                cancelButtonColor: '#3085d6',
-                confirmButtonText: 'Yes, re-download models'
-            });
-
-            if (!confirmResult.isConfirmed) {
-                return;
-            }
-
-            const originalHtml = forceModelRedownloadBtn.innerHTML;
-            try {
-                forceModelRedownloadBtn.disabled = true;
-                forceModelRedownloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
-
-                const response = await fetch('/api/settings/rag-force-model-redownload', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                });
-
-                const result = await response.json();
-                if (!result.success) {
-                    throw new Error(result.error || 'Failed to start model re-download');
-                }
-
-                await Swal.fire({
-                    icon: 'success',
-                    title: 'Model re-download started',
-                    text: result.message || 'RAG model refresh is running in the background. You can monitor progress in the RAG page status panel.'
-                });
-            } catch (error) {
-                await Swal.fire({
-                    icon: 'error',
-                    title: 'Action failed',
-                    text: error.message
-                });
-            } finally {
-                forceModelRedownloadBtn.disabled = false;
-                forceModelRedownloadBtn.innerHTML = originalHtml;
-            }
-        });
-    }
-
     // Force Reconcile Button Handler
     const forceReconcileBtn = document.getElementById('forceReconcileBtn');
     if (forceReconcileBtn) {
@@ -1203,6 +1159,7 @@ function getReadableTooltipOptions(overrides = {}) {
         allowHTML: true,
         placement: getSettingsTooltipPlacement(),
         interactive: true,
+        trigger: 'mouseenter focus click',
         theme: 'light-border',
         touch: 'hold',
         appendTo: () => document.body,
@@ -1324,25 +1281,71 @@ class SettingsHintManager {
     }
 
     constructor() {
-        this.initialize();
+        this.initializeTagCacheHint();
+        this.refresh();
     }
 
-    initialize() {
-        const hintRows = Array.from(document.querySelectorAll('#setupForm p.text-xs.text-gray-500'));
+    getHintRows() {
+        return Array.from(document.querySelectorAll('#setupForm p.text-xs.text-gray-500'));
+    }
+
+    findAssociatedLabel(hint) {
+        const container = hint.closest('.space-y-2') || hint.parentElement;
+        if (!container) {
+            return null;
+        }
+
+        const directLabels = Array.from(container.querySelectorAll('label'));
+        if (directLabels.length > 0) {
+            return directLabels[0];
+        }
+
+        let sibling = hint.previousElementSibling;
+        while (sibling) {
+            if (sibling.matches && sibling.matches('label')) {
+                return sibling;
+            }
+
+            if (sibling.querySelector) {
+                const nestedLabel = sibling.querySelector('label');
+                if (nestedLabel) {
+                    return nestedLabel;
+                }
+            }
+
+            sibling = sibling.previousElementSibling;
+        }
+
+        return null;
+    }
+
+    findFallbackAnchor(hint) {
+        const container = hint.closest('.space-y-2') || hint.parentElement;
+        if (!container) {
+            return null;
+        }
+
+        return container.querySelector('input, select, textarea, button') || container;
+    }
+
+    ensureHintTriggers() {
+        const hintRows = this.getHintRows();
         const tooltipTargets = [];
 
         hintRows.forEach((hint) => {
-            const container = hint.closest('.space-y-2') || hint.parentElement;
-            if (!container) {
+            const label = this.findAssociatedLabel(hint);
+
+            const fallbackAnchor = label ? null : this.findFallbackAnchor(hint);
+            if (!label && !fallbackAnchor) {
                 return;
             }
 
-            const label = container.querySelector('label');
-            if (!label) {
+            if (label && label.querySelector('.setting-hint-trigger')) {
+                hint.classList.add('hidden');
                 return;
             }
 
-            if (label.querySelector('.setting-hint-trigger')) {
+            if (!label && hint.parentElement?.querySelector('.setting-hint-trigger[data-hint-fallback="true"]')) {
                 hint.classList.add('hidden');
                 return;
             }
@@ -1357,26 +1360,53 @@ class SettingsHintManager {
             trigger.style.minHeight = '1.125rem';
             trigger.innerHTML = '<i class="fas fa-circle-question" style="font-size:0.875rem;line-height:1;"></i>';
             trigger.dataset.hintContent = hint.innerHTML;
+            trigger.dataset.hintFallback = label ? 'false' : 'true';
 
-            if (!label.classList.contains('flex')) {
-                label.classList.add('flex', 'items-center');
+            if (label) {
+                if (!label.classList.contains('flex')) {
+                    label.classList.add('flex', 'items-center');
+                }
+
+                label.appendChild(trigger);
+            } else if (fallbackAnchor.matches && fallbackAnchor.matches('input, select, textarea, button')) {
+                fallbackAnchor.insertAdjacentElement('afterend', trigger);
+            } else {
+                fallbackAnchor.appendChild(trigger);
             }
 
-            label.appendChild(trigger);
             hint.classList.add('hidden');
             tooltipTargets.push(trigger);
         });
 
-        if (tooltipTargets.length > 0) {
-            const hintTooltipInstances = tippy(tooltipTargets, getReadableTooltipOptions({
-                maxWidth: 360,
-                content(reference) {
-                    return createReadableTooltipContent(reference.dataset.hintContent || '', '8px 10px');
-                }
-            }));
-            registerTooltipInstances(hintTooltipInstances);
+        return tooltipTargets;
+    }
+
+    bindHintTooltips(tooltipTargets) {
+        if (!Array.isArray(tooltipTargets) || tooltipTargets.length === 0) {
+            return;
         }
 
+        const hintTooltipInstances = tippy(tooltipTargets, getReadableTooltipOptions({
+            maxWidth: 360,
+            content(reference) {
+                return createReadableTooltipContent(reference.dataset.hintContent || '', '8px 10px');
+            }
+        }));
+        registerTooltipInstances(hintTooltipInstances);
+    }
+
+    refresh() {
+        const tooltipTargets = this.ensureHintTriggers();
+        this.bindHintTooltips(tooltipTargets);
+
+        const unboundTriggers = Array.from(document.querySelectorAll('.setting-hint-trigger')).filter(
+            (trigger) => !trigger._tippy
+        );
+        this.bindHintTooltips(unboundTriggers);
+    }
+
+    initialize() {
+        this.refresh();
         this.initializeTagCacheHint();
     }
 
@@ -1434,7 +1464,55 @@ class SettingsHintManager {
 function initializeTooltipAndValidation() {
     const urlValidator = new URLValidator();
     const tooltipManager = new TooltipManager();
-    const settingsHintManager = new SettingsHintManager();
+    settingsHintManager = new SettingsHintManager();
+    initializeSettingsHintObserver();
+    scheduleSettingsHintsRefresh();
+}
+
+let settingsHintManager = null;
+let settingsHintObserver = null;
+let settingsHintRefreshScheduled = false;
+
+function refreshSettingsHints() {
+    if (!settingsHintManager) {
+        return;
+    }
+
+    settingsHintManager.refresh();
+}
+
+function scheduleSettingsHintsRefresh() {
+    if (settingsHintRefreshScheduled) {
+        return;
+    }
+
+    settingsHintRefreshScheduled = true;
+    requestAnimationFrame(() => {
+        settingsHintRefreshScheduled = false;
+        refreshSettingsHints();
+    });
+}
+
+function initializeSettingsHintObserver() {
+    if (settingsHintObserver) {
+        return;
+    }
+
+    const setupForm = document.getElementById('setupForm');
+    if (!setupForm) {
+        return;
+    }
+
+    settingsHintObserver = new MutationObserver(() => {
+        scheduleSettingsHintsRefresh();
+    });
+
+    settingsHintObserver.observe(setupForm, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'style', 'hidden']
+    });
 }
 
 function initializeRuntimeOverridePills() {
@@ -1539,8 +1617,6 @@ function initializeRuntimeOverridePills() {
         { selector: '#mistralApiKey', envKey: 'MISTRAL_API_KEY' },
         { selector: '#mistralOcrModel', envKey: 'MISTRAL_OCR_MODEL' },
         { selector: '#tagCacheTTL', envKey: 'TAG_CACHE_TTL_SECONDS' },
-        { selector: '#ragServiceEnabled', envKey: 'RAG_SERVICE_ENABLED' },
-        { selector: '#ragServiceUrl', envKey: 'RAG_SERVICE_URL' },
         { selector: '#globalRateLimitWindowMs', envKey: 'GLOBAL_RATE_LIMIT_WINDOW_MS' },
         { selector: '#globalRateLimitMax', envKey: 'GLOBAL_RATE_LIMIT_MAX' },
         { selector: '#trustProxy', envKey: 'TRUST_PROXY' },

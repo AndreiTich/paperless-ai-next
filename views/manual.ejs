@@ -1,12 +1,11 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full" data-theme="light">
+<html lang="en" class="h-full<%= theme === 'dark' ? ' dark' : '' %>" data-theme="<%= theme || 'light' %>">
 <%- include('partials/shell/head-start', { pageTitle: 'Paperless-AI next Dashboard' }) %>
     <script src="/vendor/chart/chart.min.js"></script>
 <%- include('partials/shell/head-end') %>
 <%- include('partials/shell/body-open', {
     version: typeof version !== 'undefined' ? version : '',
-    chatEnabled: typeof chatEnabled !== 'undefined' ? chatEnabled : false,
-    ragEnabled: typeof ragEnabled !== 'undefined' ? ragEnabled : false
+    chatEnabled: typeof chatEnabled !== 'undefined' ? chatEnabled : false
 }) %>
             <div class="content-wrapper">
                 <!-- Message Area -->
@@ -61,12 +60,6 @@
                                     disabled>
                                     <i class="fas fa-robot mr-2"></i>
                                     Analyze with AI
-                            </button>
-                            <button id="chatBtn" 
-                                    class="mt-2 w-full flex justify-center items-center px-4 py-2 border border-border-color rounded-md shadow-sm text-sm font-medium text-text-primary bg-bg-primary hover:bg-hover-bg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-primary transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed" 
-                                    disabled>
-                                    <i class="fas fa-comment mr-2"></i>
-                                    Chat with AI (Beta)
                             </button>
                             <div id="aiStatus" class="mt-4 hidden">
                                 <div class="flex items-center">

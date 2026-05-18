@@ -9,9 +9,7 @@ const azureService = require('../services/azureService.js');
 const documentModel = require('../models/document.js');
 const AIServiceFactory = require('../services/aiServiceFactory');
 const configFile = require('../config/config.js');
-const ChatService = require('../services/chatService.js');
 const documentsService = require('../services/documentsService.js');
-const RAGService = require('../services/ragService.js');
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
@@ -28,30 +26,11 @@ const { THUMBNAIL_CACHE_DIR, getThumbnailCachePath } = require('../services/thum
 const config = require('../config/config.js');
 require('dotenv').config({ path: '../data/.env' });
 
-function isChatEnabled() {
-  const ragEnabled = process.env.RAG_SERVICE_ENABLED === 'true';
-  return ragEnabled;
-}
 
 function getCookieSecureMode() {
   return typeof config.getCookieSecureMode === 'function'
     ? config.getCookieSecureMode()
     : String(process.env.COOKIE_SECURE_MODE || 'auto').trim().toLowerCase();
-}
-
-async function triggerPythonRestartAfterConfigSave(reason) {
-  const ragEnabled = String(process.env.RAG_SERVICE_ENABLED || '').trim().toLowerCase() === 'true';
-  if (!ragEnabled) {
-    return { requested: false, reason: 'rag_disabled' };
-  }
-
-  try {
-    const result = await RAGService.restartPythonService({ reason, delaySeconds: 0.75 });
-    return { requested: true, result };
-  } catch (error) {
-    console.warn('[WARN] Failed to request Python RAG restart after config save:', error.message || error);
-    return { requested: false, reason: 'request_failed', error: error.message || String(error) };
-  }
 }
 
 function shouldUseSecureCookies(req) {
@@ -245,21 +224,6 @@ const cacheClearLimiter = rateLimit({
   }
 });
 
-const chatDocumentSearchLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 40,
-  message: {
-    success: false,
-    error: 'Too many chat search requests. Please try again shortly.'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => {
-    const apiKey = req.headers['x-api-key'];
-    const currentApiKey = config.getApiKey();
-    return currentApiKey && apiKey && apiKey === currentApiKey;
-  }
-});
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -286,8 +250,6 @@ const loginLimiter = rateLimit({
  *     description: General navigation endpoints for the web interface
  *   - name: System
  *     description: System configuration, health checks, and administrative functions
- *   - name: Chat
- *     description: Document chat functionality for interacting with document content using AI
  *   - name: Setup
  *     description: Application setup and configuration endpoints
  *   - name: Metadata
@@ -1091,8 +1053,6 @@ router.get('/playground', protectApiRoute, async (req, res) => {
   try {
     res.render('playground', {
       version: configFile.PAPERLESS_AI_VERSION || ' ',
-      ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-      chatEnabled: isChatEnabled()
     });
   } catch (error) {
     console.error('[ERROR] loading documents view:', error);
@@ -1253,481 +1213,6 @@ router.get('/thumb/:documentId', isAuthenticated, async (req, res) => {
   }
 });
 
-// Hauptseite mit Dokumentenliste
-/**
- * @swagger
- * /chat:
- *   get:
- *     summary: Chat interface page
- *     description: |
- *       Renders the chat interface page where users can interact with document-specific AI assistants.
- *       This page displays a list of available documents and the chat interface for the selected document.
- *     tags: 
- *       - Navigation
- *       - Chat
- *     parameters:
- *       - in: query
- *         name: open
- *         schema:
- *           type: string
- *         description: ID of document to open immediately in chat
- *         required: false
- *     security:
- *       - BearerAuth: []
- *     responses:
- *       200:
- *         description: Chat interface page rendered successfully
- *         content:
- *           text/html:
- *             schema:
- *               type: string
- *       401:
- *         description: Authentication required
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       403:
- *         description: Invalid or expired token
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       500:
- *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- */
-router.get('/chat', async (req, res) => {
-  try {
-      const {open} = req.query;
-      let documents = [];
-
-      // Keep initial payload small; prefill only the requested document if present.
-      if (open) {
-        try {
-          const openDocument = await paperlessService.getDocument(open);
-          if (openDocument?.id) {
-            documents = [{ id: openDocument.id, title: openDocument.title }];
-          }
-        } catch (error) {
-          console.warn(`[WARN] Could not preload document ${open} for chat:`, error.message);
-        }
-      }
-
-      const version = configFile.PAPERLESS_AI_VERSION || ' ';
-      res.render('chat', { documents, open, version, ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true', chatEnabled: isChatEnabled() });
-  } catch (error) {
-    console.error('[ERRO] loading documents:', error);
-    res.status(500).send('Error loading documents');
-  }
-});
-
-/**
- * @swagger
- * /api/chat/documents:
- *   get:
- *     summary: Search chat documents
- *     description: |
- *       Returns a paginated list of documents for the Document Chat selector.
- *       The endpoint proxies the Paperless document search API and returns a compact payload
- *       optimized for type-ahead search in the chat UI.
- *     tags:
- *       - Chat
- *       - API
- *     security:
- *       - BearerAuth: []
- *       - ApiKeyAuth: []
- *     parameters:
- *       - in: query
- *         name: q
- *         required: false
- *         schema:
- *           type: string
- *         description: Search term for title, id, correspondent, and Paperless full-text query
- *         example: invoice
- *       - in: query
- *         name: limit
- *         required: false
- *         schema:
- *           type: integer
- *           minimum: 1
- *           maximum: 100
- *           default: 25
- *         description: Maximum number of results to return
- *     responses:
- *       200:
- *         description: Chat documents loaded successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 data:
- *                   type: object
- *                   properties:
- *                     query:
- *                       type: string
- *                       example: invoice
- *                     limit:
- *                       type: integer
- *                       example: 25
- *                     documents:
- *                       type: array
- *                       items:
- *                         type: object
- *                         properties:
- *                           id:
- *                             type: integer
- *                             example: 123
- *                           title:
- *                             type: string
- *                             example: Invoice 2026-0007
- *                           correspondent:
- *                             type: string
- *                             example: ACME GmbH
- *                           correspondentId:
- *                             type: integer
- *                             nullable: true
- *                             example: 9
- *                           created:
- *                             type: string
- *                             nullable: true
- *                             example: "2026-03-04"
- *       401:
- *         description: Unauthorized - authentication required
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       429:
- *         description: Too many requests
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       500:
- *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- */
-router.get('/api/chat/documents', isAuthenticated, chatDocumentSearchLimiter, async (req, res) => {
-  try {
-    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200) : '';
-    const requestedLimit = parseInt(req.query.limit, 10);
-    const limit = Number.isInteger(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 100)) : 25;
-
-    const documents = await documentsService.searchDocumentsForChat({
-      query: q,
-      limit
-    });
-
-    res.json({
-      success: true,
-      data: {
-        query: q,
-        limit,
-        documents
-      }
-    });
-  } catch (error) {
-    console.error('[ERROR] loading chat documents:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error loading chat documents'
-    });
-  }
-});
-
-/**
- * @swagger
- * /chat/init:
- *   get:
- *     summary: Initialize chat for a document via query parameter
- *     description: |
- *       Initializes a chat session for a specific document identified by the query parameter.
- *       Loads document content and prepares it for the chat interface.
- *       This endpoint returns the document content, chat history if available, and initial context.
- *     tags: 
- *       - API
- *       - Chat
- *     parameters:
- *       - in: query
- *         name: documentId
- *         required: true
- *         schema:
- *           type: string
- *         description: ID of the document to initialize chat for
- *         example: "123"
- *     security:
- *       - BearerAuth: []
- *     responses:
- *       200:
- *         description: Chat session initialized successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 documentId:
- *                   type: string
- *                   description: ID of the document
- *                   example: "123"
- *                 content:
- *                   type: string
- *                   description: Content of the document
- *                   example: "This is the document content"
- *                 title:
- *                   type: string
- *                   description: Title of the document
- *                   example: "Invoice #12345"
- *                 history:
- *                   type: array
- *                   description: Previous chat messages if any
- *                   items:
- *                     type: object
- *                     properties:
- *                       role:
- *                         type: string
- *                         example: "user"
- *                       content:
- *                         type: string
- *                         example: "What is this document about?"
- *       400:
- *         description: Missing document ID
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       401:
- *         description: Authentication required
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       403:
- *         description: Invalid or expired token
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       404:
- *         description: Document not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       500:
- *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- */
-router.get('/chat/init', async (req, res) => {
-  const documentId = req.query.documentId;
-  const result = await ChatService.initializeChat(documentId);
-  res.json(result);
-});
-
-// Nachricht senden
-/**
- * @swagger
- * /chat/message:
- *   post:
- *     summary: Send message to document chat
- *     description: |
- *       Sends a user message to the document-specific chat AI assistant.
- *       The message is processed in the context of the specified document.
- *       Returns a streaming response with the AI's reply chunks.
- *     tags: 
- *       - API
- *       - Chat
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - documentId
- *               - message
- *             properties:
- *               documentId:
- *                 type: string
- *                 description: ID of the document to chat with
- *                 example: "123"
- *               message:
- *                 type: string
- *                 description: User message to send to the chat
- *                 example: "What is this document about?"
- *     responses:
- *       200:
- *         description: |
- *           Response streaming started. Each event contains a message chunk.
- *         content:
- *           text/event-stream:
- *             schema:
- *               type: string
- *               example: |
- *                 data: {"chunk":"This document appears to be"}
- *                 
- *                 data: {"chunk":" an invoice from"}
- *                 
- *                 data: {"done":true}
- *       400:
- *         description: Missing document ID or message
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       401:
- *         description: Authentication required
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       403:
- *         description: Invalid or expired token
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       404:
- *         description: Document not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       500:
- *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- */
-router.post('/chat/message', async (req, res) => {
-  try {
-    const { documentId, message } = req.body;
-    if (!documentId || !message) {
-      return res.status(400).json({ error: 'Document ID and message are required' });
-    }
-    
-    // Use the new streaming method
-    await ChatService.sendMessageStream(documentId, message, res);
-  } catch (error) {
-    console.error('Chat message error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * @swagger
- * /chat/init/{documentId}:
- *   get:
- *     summary: Initialize chat for a document via path parameter
- *     description: |
- *       Initializes a chat session for a specific document identified by the path parameter.
- *       Loads document content and prepares it for the chat interface.
- *       This endpoint returns the document content, chat history if available, and initial context.
- *     tags: 
- *       - API
- *       - Chat
- *     parameters:
- *       - in: path
- *         name: documentId
- *         required: true
- *         schema:
- *           type: string
- *         description: ID of the document to initialize chat for
- *         example: "123"
- *     security:
- *       - BearerAuth: []
- *     responses:
- *       200:
- *         description: Chat session initialized successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 documentId:
- *                   type: string
- *                   description: ID of the document
- *                   example: "123"
- *                 content:
- *                   type: string
- *                   description: Content of the document
- *                   example: "This is the document content"
- *                 title:
- *                   type: string
- *                   description: Title of the document
- *                   example: "Invoice #12345"
- *                 history:
- *                   type: array
- *                   description: Previous chat messages if any
- *                   items:
- *                     type: object
- *                     properties:
- *                       role:
- *                         type: string
- *                         example: "user"
- *                       content:
- *                         type: string
- *                         example: "What is this document about?"
- *       400:
- *         description: Missing document ID
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       401:
- *         description: Authentication required
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       403:
- *         description: Invalid or expired token
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       404:
- *         description: Document not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *       500:
- *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- */
-router.get('/chat/init/:documentId', async (req, res) => {
-  try {
-      const { documentId } = req.params;
-      if (!documentId) {
-          return res.status(400).json({ error: 'Document ID is required' });
-      }
-      const result = await ChatService.initializeChat(documentId);
-      res.json(result);
-  } catch (error) {
-      console.error('[ERRO] initializing chat:', error);
-      res.status(500).json({ error: 'Failed to initialize chat' });
-  }
-});
 
 /**
  * @swagger
@@ -1776,8 +1261,6 @@ router.get('/history', async (req, res) => {
     // This allows the page to render immediately
     res.render('history', {
       version: configFile.PAPERLESS_AI_VERSION,
-      ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-      chatEnabled: isChatEnabled(),
       filters: {
         allTags: [],  // Will be loaded by JavaScript via /api/history/load-progress
         allCorrespondents: []  // Will be populated when DataTable loads
@@ -2750,50 +2233,6 @@ router.post('/api/settings/reset-local-overrides', isAuthenticated, cacheClearLi
     res.status(500).json({
       success: false,
       error: 'Failed to reset local runtime overrides'
-    });
-  }
-});
-
-/**
- * @swagger
- * /api/settings/rag-force-model-redownload:
- *   post:
- *     summary: Force RAG model re-download
- *     description: Triggers re-download of RAG models in the background.
- *     tags:
- *       - Settings
- *       - RAG
- *     security:
- *       - BearerAuth: []
- *       - ApiKeyAuth: []
- *     responses:
- *       200:
- *         description: Re-download trigger accepted
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *       500:
- *         description: Server error
- */
-
-router.post('/api/settings/rag-force-model-redownload', isAuthenticated, cacheClearLimiter, async (req, res) => {
-  try {
-    const result = await RAGService.redownloadModels();
-    res.json({
-      success: true,
-      message: result?.message || 'Model re-download has been started in the background.'
-    });
-  } catch (error) {
-    console.error('[ERROR] triggering RAG model re-download:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to trigger model re-download'
     });
   }
 });
@@ -4553,8 +3992,6 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
       setupMfaChallenges.delete(mfaChallengeId);
     }
 
-    await triggerPythonRestartAfterConfigSave('setup_complete');
-
     const envPreview = toEnvPreviewLines(finalConfig);
 
     // Enforce a fresh login after setup completion.
@@ -4742,8 +4179,6 @@ router.get('/manual', async (req, res) => {
     error: null,
     success: null,
     version,
-    ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-    chatEnabled: isChatEnabled(),
     paperlessUrl: process.env.PAPERLESS_API_URL,
     paperlessToken: process.env.PAPERLESS_API_TOKEN,
     config: {}
@@ -5241,8 +4676,6 @@ router.get('/dashboard', async (req, res) => {
     }, 
     version,
     paperlessUrl,
-    ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-    chatEnabled: isChatEnabled()
   });
 });
 
@@ -5542,8 +4975,6 @@ router.get('/settings', async (req, res) => {
     ACTIVATE_CUSTOM_FIELDS: process.env.ACTIVATE_CUSTOM_FIELDS || 'yes',
     CUSTOM_FIELDS: process.env.CUSTOM_FIELDS || '{"custom_fields":[]}',
     DISABLE_AUTOMATIC_PROCESSING: process.env.DISABLE_AUTOMATIC_PROCESSING || 'no',
-    RAG_SERVICE_ENABLED: process.env.RAG_SERVICE_ENABLED || 'true',
-    RAG_SERVICE_URL: process.env.RAG_SERVICE_URL || 'http://localhost:8000',
     MISTRAL_OCR_ENABLED: process.env.MISTRAL_OCR_ENABLED || 'no',
     MISTRAL_API_KEY: process.env.MISTRAL_API_KEY || '',
     MISTRAL_OCR_MODEL: process.env.MISTRAL_OCR_MODEL || 'mistral-ocr-latest',
@@ -5617,8 +5048,6 @@ router.get('/settings', async (req, res) => {
 
   res.render('settings', { 
     version,
-    ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-    chatEnabled: isChatEnabled(),
     config,
     configuredSecrets,
     runtimeOverrideKeys: Array.from(runtimeOverrideKeys),
@@ -6806,8 +6235,6 @@ router.post('/settings', express.json(), async (req, res) => {
       mistralOcrEnabled,
       mistralApiKey,
       mistralOcrModel,
-      ragServiceEnabled,
-      ragServiceUrl,
       globalRateLimitWindowMs,
       globalRateLimitMax,
       trustProxy,
@@ -6877,8 +6304,6 @@ router.post('/settings', express.json(), async (req, res) => {
       EXTERNAL_API_TRANSFORM: process.env.EXTERNAL_API_TRANSFORM || '',
       EXTERNAL_API_ALLOW_PRIVATE_IPS: process.env.EXTERNAL_API_ALLOW_PRIVATE_IPS || 'no',
       TAG_CACHE_TTL_SECONDS: process.env.TAG_CACHE_TTL_SECONDS || '300',
-      RAG_SERVICE_ENABLED: process.env.RAG_SERVICE_ENABLED || 'true',
-      RAG_SERVICE_URL: process.env.RAG_SERVICE_URL || 'http://localhost:8000',
       MISTRAL_OCR_ENABLED: process.env.MISTRAL_OCR_ENABLED || 'no',
       MISTRAL_API_KEY: process.env.MISTRAL_API_KEY || '',
       MISTRAL_OCR_MODEL: process.env.MISTRAL_OCR_MODEL || 'mistral-ocr-latest',
@@ -7114,8 +6539,6 @@ router.post('/settings', express.json(), async (req, res) => {
       if (mistralOcrEnabled) updatedConfig.MISTRAL_OCR_ENABLED = mistralOcrEnabled;
       if (hasMistralApiKeyInput) updatedConfig.MISTRAL_API_KEY = effectiveMistralApiKey;
       if (mistralOcrModel) updatedConfig.MISTRAL_OCR_MODEL = mistralOcrModel;
-      if (ragServiceEnabled) updatedConfig.RAG_SERVICE_ENABLED = ragServiceEnabled;
-      if (ragServiceUrl) updatedConfig.RAG_SERVICE_URL = ragServiceUrl;
       if (globalRateLimitWindowMs) updatedConfig.GLOBAL_RATE_LIMIT_WINDOW_MS = globalRateLimitWindowMs;
       if (globalRateLimitMax) updatedConfig.GLOBAL_RATE_LIMIT_MAX = globalRateLimitMax;
       if (typeof trustProxy === 'string') updatedConfig.TRUST_PROXY = trustProxy.trim();
@@ -7174,8 +6597,6 @@ router.post('/settings', express.json(), async (req, res) => {
     } catch (error) {
       console.log('[ERROR] Error creating custom fields:', error);
     }
-
-    await triggerPythonRestartAfterConfigSave('settings_save');
 
     res.json({ 
       success: true,
@@ -7290,39 +6711,6 @@ router.get('/api/processing-status', isAuthenticated, async (req, res) => {
   }
 });
 
-router.get('/api/rag-test', async (req, res) => {
-  RAGService.initialize();
-  try { 
-    if(await RAGService.sendDocumentsToRAGService()){
-      res.status(200).json({ success: true });
-    }else{
-      res.status(500).json({ success: false });
-    }    
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch processing status' });
-  }
-}
-);
-
-/**
- * @swagger
- * /api/rag-test:
- *   get:
- *     summary: Trigger RAG diagnostic run
- *     description: Initializes RAG and attempts to send documents to the RAG service.
- *     tags:
- *       - RAG
- *       - API
- *     security:
- *       - BearerAuth: []
- *       - ApiKeyAuth: []
- *     responses:
- *       200:
- *         description: RAG diagnostic completed successfully
- *       500:
- *         description: RAG diagnostic failed
- */
-
 router.get('/dashboard/doc/:id', async (req, res) => {
   const docId = req.params.id;
   if (!docId) {
@@ -7376,8 +6764,6 @@ router.get('/ocr', protectApiRoute, async (req, res) => {
   try {
     return res.render('ocr', {
       version: configFile.PAPERLESS_AI_VERSION || ' ',
-      ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-      chatEnabled: isChatEnabled(),
       ocrEnabled: configFile.mistralOcr?.enabled === 'yes'
     });
   } catch (error) {
@@ -7413,8 +6799,6 @@ router.get('/failed', protectApiRoute, async (req, res) => {
   try {
     return res.render('failed', {
       version: configFile.PAPERLESS_AI_VERSION || ' ',
-      ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-      chatEnabled: isChatEnabled()
     });
   } catch (error) {
     console.error('[ERROR] Failed page:', error);
@@ -7469,8 +6853,6 @@ router.get('/about', protectApiRoute, async (req, res) => {
       platform: `${process.platform} (${process.arch})`,
       nodeEnv: process.env.NODE_ENV || 'production',
       aiProvider: configFile.aiProvider || process.env.AI_PROVIDER || 'openai',
-      ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-      chatEnabled: isChatEnabled(),
       ocrEnabled: configFile.mistralOcr?.enabled === 'yes',
       serverTimeUtc: new Date().toISOString(),
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
@@ -7502,16 +6884,12 @@ router.get('/about', protectApiRoute, async (req, res) => {
 
     return res.render('about', {
       version: configFile.PAPERLESS_AI_VERSION || ' ',
-      ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-      chatEnabled: isChatEnabled(),
       supportInfo
     });
   } catch (error) {
     console.error('[ERROR] About page:', error);
     return res.status(500).render('about', {
       version: configFile.PAPERLESS_AI_VERSION || ' ',
-      ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-      chatEnabled: isChatEnabled(),
       supportInfo: {
         appVersion: configFile.PAPERLESS_AI_VERSION || 'unknown',
         commitSha: process.env.PAPERLESS_AI_COMMIT_SHA || 'unknown',
@@ -7520,8 +6898,6 @@ router.get('/about', protectApiRoute, async (req, res) => {
         platform: `${process.platform} (${process.arch})`,
         nodeEnv: process.env.NODE_ENV || 'production',
         aiProvider: configFile.aiProvider || process.env.AI_PROVIDER || 'openai',
-        ragEnabled: process.env.RAG_SERVICE_ENABLED === 'true',
-        chatEnabled: isChatEnabled(),
         ocrEnabled: configFile.mistralOcr?.enabled === 'yes',
         serverTimeUtc: new Date().toISOString(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
@@ -8193,5 +7569,82 @@ router.post('/api/failed/reset-all', isAuthenticated, async (req, res) => {
  *       500:
  *         description: Server error
  */
+
+/**
+ * @swagger
+ * /api/changelog/status:
+ *   get:
+ *     summary: Check whether the What's New modal should be shown
+ *     description: Returns show=true when the authenticated user has not yet seen the current release changelog.
+ *     tags:
+ *       - Changelog
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Changelog status
+ *       401:
+ *         description: Not authenticated
+ */
+router.get('/api/changelog/status', isAuthenticated, async (req, res) => {
+  try {
+    if (req.user && req.user.apiKey) {
+      return res.json({ show: false });
+    }
+
+    const changelog = require('../config/changelog');
+    const username = req.user && req.user.username;
+    if (!username) {
+      return res.json({ show: false });
+    }
+
+    const lastSeen = await documentModel.getLastSeenChangelogVersion(username);
+    const show = lastSeen !== changelog.version;
+
+    return res.json({
+      show,
+      version: changelog.version,
+      entries: show ? changelog.entries : [],
+    });
+  } catch (error) {
+    console.error('[ERROR] GET /api/changelog/status:', error);
+    return res.status(500).json({ show: false, error: 'Failed to load changelog status' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/changelog/mark-seen:
+ *   post:
+ *     summary: Mark the current changelog as seen for the authenticated user
+ *     tags:
+ *       - Changelog
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Marked as seen
+ *       401:
+ *         description: Not authenticated
+ */
+router.post('/api/changelog/mark-seen', isAuthenticated, async (req, res) => {
+  try {
+    if (req.user && req.user.apiKey) {
+      return res.json({ success: true });
+    }
+
+    const changelog = require('../config/changelog');
+    const username = req.user && req.user.username;
+    if (!username) {
+      return res.json({ success: true });
+    }
+
+    await documentModel.setLastSeenChangelogVersion(username, changelog.version);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('[ERROR] POST /api/changelog/mark-seen:', error);
+    return res.status(500).json({ success: false, error: 'Failed to mark changelog as seen' });
+  }
+});
 
 module.exports = router;
