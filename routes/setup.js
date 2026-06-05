@@ -6331,6 +6331,7 @@ router.post('/settings', express.json(), async (req, res) => {
     const effectiveAzureApiKey = hasAzureApiKeyInput ? azureApiKey.trim() : currentConfig.AZURE_API_KEY;
     const hasMistralApiKeyInput = hasValue(mistralApiKey);
     const effectiveMistralApiKey = hasMistralApiKeyInput ? mistralApiKey.trim() : currentConfig.MISTRAL_API_KEY;
+    const normalizeCompare = (value) => String(value || '').trim();
 
     // Process custom fields
     let processedCustomFields = [];
@@ -6349,14 +6350,6 @@ router.post('/settings', express.json(), async (req, res) => {
         console.error('Error processing custom fields:', error);
         processedCustomFields = [];
       }
-    }
-
-    try {
-      for (const field of processedCustomFields) {
-        await paperlessService.createCustomFieldSafely(field.value, field.data_type, field.currency);
-      }
-    } catch (error) {
-      console.log('[ERROR] Error creating custom fields:', error);
     }
 
     const normalizeArray = (value) => {
@@ -6413,68 +6406,119 @@ router.post('/settings', express.json(), async (req, res) => {
 
     // Handle AI provider configuration
     if (aiProvider) {
-      updatedConfig.AI_PROVIDER = aiProvider;
-      
-      if (aiProvider === 'openai') {
+      const selectedAiProvider = String(aiProvider).trim().toLowerCase();
+      const currentAiProvider = String(currentConfig.AI_PROVIDER || '').trim().toLowerCase();
+      const providerChanged = selectedAiProvider !== currentAiProvider;
+
+      updatedConfig.AI_PROVIDER = selectedAiProvider;
+
+      if (selectedAiProvider === 'openai') {
+        const modelChanged = hasValue(openaiModel) && normalizeCompare(openaiModel) !== normalizeCompare(currentConfig.OPENAI_MODEL);
+        const shouldValidateOpenAi = providerChanged || hasOpenAiKeyInput || modelChanged;
+
         if (!effectiveOpenAiKey) {
           return res.status(400).json({
             error: 'OpenAI API key is required when OpenAI provider is selected.'
           });
         }
 
-        const isOpenAIValid = await setupService.validateOpenAIConfig(effectiveOpenAiKey);
-        if (!isOpenAIValid) {
-          return res.status(400).json({ 
-            error: 'OpenAI API Key is not valid. Please check the key.'
-          });
+        if (shouldValidateOpenAi) {
+          const isOpenAIValid = await setupService.validateOpenAIConfig(effectiveOpenAiKey);
+          if (!isOpenAIValid) {
+            return res.status(400).json({ 
+              error: `OpenAI API Key is not valid or timed out after ${setupService.getValidationTimeoutMs()}ms. Please check the key and connectivity.`
+            });
+          }
         }
+
         if (hasOpenAiKeyInput) {
           updatedConfig.OPENAI_API_KEY = effectiveOpenAiKey;
         }
         if (openaiModel) updatedConfig.OPENAI_MODEL = openaiModel;
-      } 
-      else if (aiProvider === 'ollama' && (ollamaUrl || ollamaModel)) {
-        const isOllamaValid = await setupService.validateOllamaConfig(
-          ollamaUrl || currentConfig.OLLAMA_API_URL,
-          ollamaModel || currentConfig.OLLAMA_MODEL
-        );
-        if (!isOllamaValid) {
-          return res.status(400).json({ 
-            error: 'Ollama connection failed. Please check URL and Model.'
+      } else if (selectedAiProvider === 'ollama') {
+        const effectiveOllamaUrl = ollamaUrl || currentConfig.OLLAMA_API_URL;
+        const effectiveOllamaModel = ollamaModel || currentConfig.OLLAMA_MODEL;
+        const urlChanged = hasValue(ollamaUrl) && normalizeCompare(ollamaUrl) !== normalizeCompare(currentConfig.OLLAMA_API_URL);
+        const modelChanged = hasValue(ollamaModel) && normalizeCompare(ollamaModel) !== normalizeCompare(currentConfig.OLLAMA_MODEL);
+        const shouldValidateOllama = providerChanged || urlChanged || modelChanged;
+
+        if (!effectiveOllamaUrl || !effectiveOllamaModel) {
+          return res.status(400).json({
+            error: 'Ollama URL and model are required when Ollama provider is selected.'
           });
         }
+
+        if (shouldValidateOllama) {
+          const isOllamaValid = await setupService.validateOllamaConfig(
+            effectiveOllamaUrl,
+            effectiveOllamaModel
+          );
+          if (!isOllamaValid) {
+            return res.status(400).json({ 
+              error: `Ollama connection failed or timed out after ${setupService.getValidationTimeoutMs()}ms. Please check URL and model.`
+            });
+          }
+        }
+
         if (ollamaUrl) updatedConfig.OLLAMA_API_URL = ollamaUrl;
         if (ollamaModel) updatedConfig.OLLAMA_MODEL = ollamaModel;
-      } else if (aiProvider === 'custom') {
+      } else if (selectedAiProvider === 'custom') {
         const effectiveCustomBaseUrl = customBaseUrl || currentConfig.CUSTOM_BASE_URL;
         const effectiveCustomModel = customModel || currentConfig.CUSTOM_MODEL;
-        const isCustomValid = await setupService.validateCustomConfig(
-          effectiveCustomBaseUrl,
-          effectiveCustomApiKey,
-          effectiveCustomModel
-        );
-        if (!isCustomValid) {
+        const urlChanged = hasValue(customBaseUrl) && normalizeCompare(customBaseUrl) !== normalizeCompare(currentConfig.CUSTOM_BASE_URL);
+        const modelChanged = hasValue(customModel) && normalizeCompare(customModel) !== normalizeCompare(currentConfig.CUSTOM_MODEL);
+        const shouldValidateCustom = providerChanged || hasCustomApiKeyInput || urlChanged || modelChanged;
+
+        if (!effectiveCustomBaseUrl || !effectiveCustomModel) {
           return res.status(400).json({
-            error: 'Custom provider connection failed. Please check URL, API key and model.'
+            error: 'Custom provider URL and model are required when custom provider is selected.'
           });
         }
+
+        if (shouldValidateCustom) {
+          const isCustomValid = await setupService.validateCustomConfig(
+            effectiveCustomBaseUrl,
+            effectiveCustomApiKey,
+            effectiveCustomModel
+          );
+          if (!isCustomValid) {
+            return res.status(400).json({
+              error: `Custom provider connection failed or timed out after ${setupService.getValidationTimeoutMs()}ms. Please check URL, API key and model.`
+            });
+          }
+        }
+
         if (hasCustomApiKeyInput) updatedConfig.CUSTOM_API_KEY = effectiveCustomApiKey;
         if (customBaseUrl) updatedConfig.CUSTOM_BASE_URL = customBaseUrl;
         if (customModel) updatedConfig.CUSTOM_MODEL = customModel;
-      } else if (aiProvider === 'azure') {
+      } else if (selectedAiProvider === 'azure') {
         const effectiveAzureEndpoint = azureEndpoint || currentConfig.AZURE_ENDPOINT;
         const effectiveAzureDeployment = azureDeploymentName || currentConfig.AZURE_DEPLOYMENT_NAME;
         const effectiveAzureApiVersion = azureApiVersion || currentConfig.AZURE_API_VERSION;
-        const isAzureValid = await setupService.validateAzureConfig(effectiveAzureApiKey, effectiveAzureEndpoint, effectiveAzureDeployment, effectiveAzureApiVersion);
-        if (!isAzureValid) {
+        const endpointChanged = hasValue(azureEndpoint) && normalizeCompare(azureEndpoint) !== normalizeCompare(currentConfig.AZURE_ENDPOINT);
+        const deploymentChanged = hasValue(azureDeploymentName) && normalizeCompare(azureDeploymentName) !== normalizeCompare(currentConfig.AZURE_DEPLOYMENT_NAME);
+        const versionChanged = hasValue(azureApiVersion) && normalizeCompare(azureApiVersion) !== normalizeCompare(currentConfig.AZURE_API_VERSION);
+        const shouldValidateAzure = providerChanged || hasAzureApiKeyInput || endpointChanged || deploymentChanged || versionChanged;
+
+        if (!effectiveAzureEndpoint || !effectiveAzureApiKey || !effectiveAzureDeployment) {
           return res.status(400).json({
-            error: 'Azure connection failed. Please check URL, API Key, Deployment Name and API Version.'
+            error: 'Azure endpoint, API key and deployment name are required when Azure provider is selected.'
           });
         }
-        if(azureEndpoint) updatedConfig.AZURE_ENDPOINT = azureEndpoint;
-        if(hasAzureApiKeyInput) updatedConfig.AZURE_API_KEY = effectiveAzureApiKey;
-        if(azureDeploymentName) updatedConfig.AZURE_DEPLOYMENT_NAME = azureDeploymentName;
-        if(azureApiVersion) updatedConfig.AZURE_API_VERSION = azureApiVersion;
+
+        if (shouldValidateAzure) {
+          const isAzureValid = await setupService.validateAzureConfig(effectiveAzureApiKey, effectiveAzureEndpoint, effectiveAzureDeployment, effectiveAzureApiVersion);
+          if (!isAzureValid) {
+            return res.status(400).json({
+              error: `Azure connection failed or timed out after ${setupService.getValidationTimeoutMs()}ms. Please check URL, API key, deployment name and API version.`
+            });
+          }
+        }
+
+        if (azureEndpoint) updatedConfig.AZURE_ENDPOINT = azureEndpoint;
+        if (hasAzureApiKeyInput) updatedConfig.AZURE_API_KEY = effectiveAzureApiKey;
+        if (azureDeploymentName) updatedConfig.AZURE_DEPLOYMENT_NAME = azureDeploymentName;
+        if (azureApiVersion) updatedConfig.AZURE_API_VERSION = azureApiVersion;
       }
     }
 

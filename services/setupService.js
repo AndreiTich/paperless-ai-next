@@ -13,6 +13,30 @@ class SetupService {
     this.envPath = path.join(process.cwd(), 'data', '.env');
     this.runtimeOverridesPath = path.join(process.cwd(), 'data', 'runtime-overrides.json');
     this.configured = null; // Variable to store the configuration status
+
+    const configuredTimeout = Number.parseInt(process.env.SETUP_VALIDATION_TIMEOUT_MS || '15000', 10);
+    this.validationTimeoutMs = Number.isFinite(configuredTimeout)
+      ? Math.min(Math.max(configuredTimeout, 1000), 120000)
+      : 15000;
+  }
+
+  getValidationTimeoutMs() {
+    return this.validationTimeoutMs;
+  }
+
+  async withValidationTimeout(promise, operationName) {
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error(`${operationName} timed out after ${this.getValidationTimeoutMs()}ms`));
+      }, this.getValidationTimeoutMs());
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   isLegacyConfigSourceMode() {
@@ -243,11 +267,14 @@ class SetupService {
   async validateOpenAIConfig(apiKey) {
     if (config.CONFIGURED === false) {
       try {
-        const openai = new OpenAI({ apiKey });
-        const response = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [{ role: "user", content: "Test" }],
-        });
+        const openai = new OpenAI({ apiKey, timeout: this.getValidationTimeoutMs() });
+        const response = await this.withValidationTimeout(
+          openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: "Test" }],
+          }),
+          'OpenAI validation'
+        );
         const now = new Date();
         const timestamp = now.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
         console.log(`[DEBUG] [${timestamp}] OpenAI request sent`);
@@ -270,26 +297,30 @@ class SetupService {
       return false;
     }
 
-    const config = {
+    const customClientConfig = {
       baseURL: url,
       // OpenAI-compatible SDKs expect an apiKey option even for endpoints without auth.
       apiKey: apiKey || CUSTOM_PROVIDER_FALLBACK_API_KEY,
       model: model
     };
     console.log('Custom AI config:', {
-      baseURL: config.baseURL,
-      apiKey: config.apiKey ? '[REDACTED]' : '',
-      model: config.model
+      baseURL: customClientConfig.baseURL,
+      apiKey: customClientConfig.apiKey ? '[REDACTED]' : '',
+      model: customClientConfig.model
     });
     try {
       const openai = new OpenAI({ 
-        apiKey: config.apiKey, 
-        baseURL: config.baseURL,
+        apiKey: customClientConfig.apiKey,
+        baseURL: customClientConfig.baseURL,
+        timeout: this.getValidationTimeoutMs(),
       });
-      const completion = await openai.chat.completions.create({
-        messages: [{ role: "user", content: "Test" }],
-        model: config.model,
-      });
+      const completion = await this.withValidationTimeout(
+        openai.chat.completions.create({
+          messages: [{ role: "user", content: "Test" }],
+          model: customClientConfig.model,
+        }),
+        'Custom AI validation'
+      );
       return completion.choices && completion.choices.length > 0;
     } catch (error) {
       console.error('Custom AI validation error:', error.message);
@@ -309,11 +340,20 @@ class SetupService {
         return false;
       }
 
-      const response = await axios.post(`${url}/api/generate`, {
-        model: model || 'llama3.2',
-        prompt: 'Test',
-        stream: false
-      });
+      const response = await this.withValidationTimeout(
+        axios.post(
+          `${url}/api/generate`,
+          {
+            model: model || 'llama3.2',
+            prompt: 'Test',
+            stream: false
+          },
+          {
+            timeout: this.getValidationTimeoutMs()
+          }
+        ),
+        'Ollama validation'
+      );
       return response.data && response.data.response;
     } catch (error) {
       console.error('Ollama validation error:', error.message);
@@ -338,11 +378,15 @@ class SetupService {
         const openai = new AzureOpenAI({ apiKey: apiKey,
                 endpoint: endpoint,
                 deploymentName: deploymentName,
-                apiVersion: apiVersion });
-        const response = await openai.chat.completions.create({
-          model: deploymentName,
-          messages: [{ role: "user", content: "Test" }],
-        });
+                apiVersion: apiVersion,
+                timeout: this.getValidationTimeoutMs() });
+        const response = await this.withValidationTimeout(
+          openai.chat.completions.create({
+            model: deploymentName,
+            messages: [{ role: "user", content: "Test" }],
+          }),
+          'Azure validation'
+        );
         const now = new Date();
         const timestamp = now.toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
         console.log(`[DEBUG] [${timestamp}] OpenAI request sent`);

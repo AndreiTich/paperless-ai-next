@@ -11,5 +11,10 @@ module.exports = {
   version: 'v2026.05.02',
   entries: [
     'Fix: Fixed hardcoded temperature settings for Ollama API',
+  ],
+  version: 'v2026.06.01',
+  entries: [
+    'New: Added support for Ollama API token usage metrics in document history',
+    'Improvement: Updated base URL validation to allow same host with different ports (e.g. http vs https) for pagination links'
   ]
 };
