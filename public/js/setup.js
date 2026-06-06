@@ -156,7 +156,7 @@ class SetupWizard {
     populateInitialValues() {
         this.adminUsername.value = this.config.username || '';
         this.scanInterval.value = this.config.SCAN_INTERVAL || this.defaults.scanInterval || '*/30 * * * *';
-        this.scanAllDocuments.checked = this.config.PROCESS_PREDEFINED_DOCUMENTS !== 'yes';
+        this.scanAllDocuments.checked = this.config.PROCESS_PREDEFINED_DOCUMENTS === 'no';
         this.includeTag.value = Array.isArray(this.config.TAGS) && this.config.TAGS.length > 0 ? this.config.TAGS[0] : '';
         this.excludeTags = Array.isArray(this.config.IGNORE_TAGS) ? this.config.IGNORE_TAGS.slice() : [];
 
