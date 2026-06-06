@@ -200,6 +200,9 @@ class SetupWizard {
         this.confirmPassword.addEventListener('input', () => this.updatePasswordHint());
 
         this.enableMfa.addEventListener('change', () => this.updateMfaPanelVisibility());
+        if (this.startMfaSetupBtn) {
+            this.startMfaSetupBtn.addEventListener('click', () => this.startMfaSetup());
+        }
         this.confirmMfaCodeBtn.addEventListener('click', () => this.confirmMfaCode());
 
         this.testPaperlessBtn.addEventListener('click', () => this.testPaperlessConnection());
