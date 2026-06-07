@@ -4,7 +4,7 @@
 
 <h1>Paperless-AI <span style="font-size: 0.62em; color: #2563eb; font-weight: 700;">next</span></h1>
 
-[![Latest Release](https://img.shields.io/github/v/release/admonstrator/paperless-ai-next?style=for-the-badge&logo=github&color=0ea5e9)](https://github.com/admonstrator/paperless-ai-next/releases/latest) [![Docker Pulls](https://img.shields.io/badge/docker%20pulls-19.8k-brightgreen?style=for-the-badge&logo=docker&color=10b981)](https://hub.docker.com/r/admonstrator/paperless-ai-next) [![Docs](https://img.shields.io/badge/docs-Live-0891b2?style=for-the-badge&logo=readthedocs)](https://paperless-ai-next.admon.me/)
+[![Latest Release](https://img.shields.io/github/v/release/admonstrator/paperless-ai-next?style=for-the-badge&logo=github&color=0ea5e9)](https://github.com/admonstrator/paperless-ai-next/releases/latest) [![Docker Pulls](https://img.shields.io/badge/docker%20pulls-22.5k-brightgreen?style=for-the-badge&logo=docker&color=10b981)](https://hub.docker.com/r/admonstrator/paperless-ai-next) [![Docs](https://img.shields.io/badge/docs-Live-0891b2?style=for-the-badge&logo=readthedocs)](https://paperless-ai-next.admon.me/)
 
 [🧠 What makes it "Next"](#-the-evolution-what-makes-it-next) | [💖 Fuel the Evolution](#-fuel-the-evolution) | [🚀 Quick Start](#-quick-start) | [💬 Frequently Asked Questions](#-frequently-asked-questions)
 
@@ -44,9 +44,15 @@ This isn't just a collection of patches; it's a total overhaul of how your docum
 
 Connect to OpenAI, Ollama, or any OpenAI-compatible API. We've moved beyond simple keyword matching. The AI now understands **intent and context**, meaning it knows the difference between an "Electricity Bill" and a "Manual for a Toaster" without you writing a single regex.
 
-### 👓 Mistral-Powered Vision
+### 👓 Flexible OCR Vision (Mistral + Local)
 
-Waging war against blurry scans, shaky smartphone photos, and handwritten scribbles that standard OCR usually chokes on. By integrating Mistral's OCR capabilities, we rescue the "unreadable" and turn it into searchable data. Everything syncs back to Paperless-ngx, ensuring your single source of truth stays intact.
+Waging war against blurry scans, shaky smartphone photos, and handwritten scribbles that standard OCR usually chokes on. You can run OCR with:
+
+- Mistral OCR (`provider: mistral`)
+- local OpenAI-compatible vision APIs (`provider: ollama` + `/v1` endpoint, e.g. LM Studio-compatible)
+- native Ollama chat vision APIs (`provider: ollama` + `/api/chat` endpoint)
+
+The OCR setup now also validates real image reading instead of only checking endpoint reachability.
 
 ### ⚡️ Performance without the "Spinner-Induced Rage"
 
@@ -115,12 +121,19 @@ volumes:
 
 Then open [http://localhost:3000](http://localhost:3000) to complete setup.
 
+### OCR Provider Notes
+
+- OCR API key env: `OCR_API_KEY` (backward-compatible fallback: `MISTRAL_API_KEY`)
+- Local OCR supports model discovery from both `/api/tags` (Ollama-style) and `/v1/models` (OpenAI-compatible)
+- OCR test sends a real PNG image and expects the exact token: `OCR-TEST-182730173401`
+- For OpenAI-compatible endpoints that reject data URLs, OCR validation automatically retries with raw base64 payload
+
 ### Container Images
 
 | Image Tag                                    | Size        |
 | -------------------------------------------- | ----------- |
 | `admonstrator/paperless-ai-next:latest`      | ~500–700 MB |
-| `admonstrator/paperless-ai-next:latest-lite` | ~500–700 MB |
+
 
 **Docker Hub:** [admonstrator/paperless-ai-next](https://hub.docker.com/r/admonstrator/paperless-ai-next)
 
@@ -164,6 +177,6 @@ If it's OpenAI-compatible, it probably works. If not, open an issue! Since I hav
 
 <div align="center">
 
-_Last updated: 2026-05-31_
+_Last updated: 2026-06-07_
 
 </div>
