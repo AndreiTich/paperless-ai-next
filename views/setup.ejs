@@ -195,8 +195,8 @@
                             <label for="processedTag" class="text-sm font-medium">Tag applied after Paperless-AI finishes</label>
                             <div class="flex gap-2">
                                 <input id="processedTag" type="text" class="setup-input flex-1" list="paperlessTagsDatalist" placeholder="e.g. ai-processed" value="<%= config.AI_PROCESSED_TAG_NAME || 'ai-processed' %>">
-                                <button type="button" id="excludeProcessedTagBtn" class="setup-btn setup-btn-secondary">Exclude this tag</button>
                             </div>
+                            <p class="setup-hint">This tag is automatically added to excluded tags during setup finalization.</p>
                         </div>
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">

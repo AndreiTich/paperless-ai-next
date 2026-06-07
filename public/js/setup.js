@@ -82,7 +82,6 @@ class SetupWizard {
         this.addExcludeTagBtn = document.getElementById('addExcludeTagBtn');
         this.excludeTagsContainer = document.getElementById('excludeTagsContainer');
         this.processedTag = document.getElementById('processedTag');
-        this.excludeProcessedTagBtn = document.getElementById('excludeProcessedTagBtn');
         this.automaticScanEnabled = document.getElementById('automaticScanEnabled');
         this.scanInterval = document.getElementById('scanInterval');
         this.paperlessTagsDatalist = document.getElementById('paperlessTagsDatalist');
@@ -281,6 +280,19 @@ class SetupWizard {
         this.confirmMfaCodeBtn.addEventListener('click', () => this.confirmMfaCode());
 
         this.scanAllDocuments.addEventListener('change', () => this.toggleIncludeTagField());
+
+        if (this.addExcludeTagBtn) {
+            this.addExcludeTagBtn.addEventListener('click', () => this.addExcludeTag(this.excludeTagInput.value));
+        }
+        if (this.excludeTagInput) {
+            this.excludeTagInput.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter') {
+                    return;
+                }
+                event.preventDefault();
+                this.addExcludeTag(this.excludeTagInput.value);
+            });
+        }
 
         this.testPaperlessBtn.addEventListener('click', () => this.testPaperlessConnection());
         this.fetchMetadataBtn.addEventListener('click', () => this.loadPaperlessMetadata());
@@ -733,6 +745,19 @@ class SetupWizard {
         });
     }
 
+    getEffectiveExcludeTags() {
+        const processedTag = String(this.processedTag?.value || '').trim();
+        const normalizedManualTags = (Array.isArray(this.excludeTags) ? this.excludeTags : [])
+            .map((value) => String(value || '').trim())
+            .filter(Boolean);
+
+        if (!processedTag) {
+            return Array.from(new Set(normalizedManualTags));
+        }
+
+        return Array.from(new Set([...normalizedManualTags, processedTag]));
+    }
+
     addExcludeTag(value) {
         const normalized = String(value || '').trim();
         if (!normalized) {
@@ -1137,7 +1162,7 @@ class SetupWizard {
         preview.push(`PAPERLESS_USERNAME=${this.paperlessUsername.value.trim()}`);
         preview.push(`PROCESS_PREDEFINED_DOCUMENTS=${this.scanAllDocuments.checked ? 'no' : 'yes'}`);
         preview.push(`TAGS=${this.scanAllDocuments.checked ? '' : this.includeTag.value.trim()}`);
-        preview.push(`IGNORE_TAGS=${this.excludeTags.join(',')}`);
+        preview.push(`IGNORE_TAGS=${this.getEffectiveExcludeTags().join(',')}`);
         preview.push(`ADD_AI_PROCESSED_TAG=${this.processedTag.value.trim() ? 'yes' : 'no'}`);
         preview.push(`AI_PROCESSED_TAG_NAME=${this.processedTag.value.trim() || 'ai-processed'}`);
         preview.push(`DISABLE_AUTOMATIC_PROCESSING=${this.automaticScanEnabled.value === 'yes' ? 'no' : 'yes'}`);
@@ -1201,7 +1226,7 @@ class SetupWizard {
             paperlessToken: this.paperlessToken.value.trim(),
             scanAllDocuments: this.scanAllDocuments.checked,
             includeTag: this.includeTag.value.trim(),
-            excludeTags: this.excludeTags,
+            excludeTags: this.getEffectiveExcludeTags(),
             processedTag: this.processedTag.value.trim(),
             automaticScanEnabled: this.automaticScanEnabled.value === 'yes',
             scanInterval: this.scanInterval.value.trim(),

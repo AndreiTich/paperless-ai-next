@@ -4250,6 +4250,10 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
     const includeTag = String(req.body?.includeTag || '').trim();
     const excludeTags = normalizeTagListInput(req.body?.excludeTags);
     const processedTag = String(req.body?.processedTag || '').trim();
+    const effectiveExcludeTags = Array.from(new Set([
+      ...excludeTags,
+      ...(processedTag ? [processedTag] : [])
+    ]));
     const automaticScanEnabled = parseBooleanInput(req.body?.automaticScanEnabled, true);
     const scanInterval = String(req.body?.scanInterval || getDefaultScanInterval()).trim() || getDefaultScanInterval();
 
@@ -4376,7 +4380,7 @@ router.post('/api/setup/complete', express.json(), async (req, res) => {
       SCAN_INTERVAL: scanInterval,
       PROCESS_PREDEFINED_DOCUMENTS: scanAllDocuments ? 'no' : 'yes',
       TAGS: tagsForProcessing,
-      IGNORE_TAGS: excludeTags,
+      IGNORE_TAGS: effectiveExcludeTags,
       ADD_AI_PROCESSED_TAG: processedTag ? 'yes' : 'no',
       AI_PROCESSED_TAG_NAME: processedTag || 'ai-processed',
       DISABLE_AUTOMATIC_PROCESSING: automaticScanEnabled ? 'no' : 'yes',
