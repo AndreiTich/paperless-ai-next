@@ -1148,11 +1148,14 @@ router.get('/api/chat/documents', isAuthenticated, async (req, res) => {
     const limit = Number.isFinite(requestedLimit)
       ? Math.min(Math.max(requestedLimit, 1), 200)
       : 100;
+    const validModes = ['all', 'title', 'tags', 'correspondent'];
+    const mode = validModes.includes(req.query?.mode) ? req.query.mode : 'all';
 
     const {
       documents,
+      tagNames,
       correspondentNames
-    } = await documentsService.getDocumentsWithMetadata(limit, query);
+    } = await documentsService.getDocumentsWithMetadata(limit, query, mode);
 
     const normalizedDocuments = (Array.isArray(documents) ? documents : []).map((doc) => {
       const correspondentId = Number(doc?.correspondent);
@@ -1160,11 +1163,16 @@ router.get('/api/chat/documents', isAuthenticated, async (req, res) => {
         ? (correspondentNames?.[correspondentId] || '')
         : '';
 
+      const resolvedTags = (Array.isArray(doc?.tags) ? doc.tags : [])
+        .map(id => tagNames?.[id])
+        .filter(Boolean);
+
       return {
         id: doc?.id,
         title: doc?.title || '',
         created: doc?.created || doc?.created_date || doc?.added || null,
-        correspondent: correspondentName
+        correspondent: correspondentName,
+        tags: resolvedTags
       };
     });
 
