@@ -1143,7 +1143,7 @@ router.get('/api/playground/bootstrap', protectApiRoute, async (req, res) => {
  */
 router.get('/api/chat/documents', isAuthenticated, async (req, res) => {
   try {
-    const query = String(req.query?.q || '').trim().toLowerCase();
+    const query = String(req.query?.q || '').trim();
     const requestedLimit = Number.parseInt(String(req.query?.limit || '100'), 10);
     const limit = Number.isFinite(requestedLimit)
       ? Math.min(Math.max(requestedLimit, 1), 200)
@@ -1152,7 +1152,7 @@ router.get('/api/chat/documents', isAuthenticated, async (req, res) => {
     const {
       documents,
       correspondentNames
-    } = await documentsService.getDocumentsWithMetadata(limit);
+    } = await documentsService.getDocumentsWithMetadata(limit, query);
 
     const normalizedDocuments = (Array.isArray(documents) ? documents : []).map((doc) => {
       const correspondentId = Number(doc?.correspondent);
@@ -1168,19 +1168,10 @@ router.get('/api/chat/documents', isAuthenticated, async (req, res) => {
       };
     });
 
-    const filteredDocuments = query
-      ? normalizedDocuments.filter((doc) => {
-        const idMatches = String(doc.id || '').includes(query);
-        const titleMatches = String(doc.title || '').toLowerCase().includes(query);
-        const correspondentMatches = String(doc.correspondent || '').toLowerCase().includes(query);
-        return idMatches || titleMatches || correspondentMatches;
-      })
-      : normalizedDocuments;
-
     return res.json({
       success: true,
       data: {
-        documents: filteredDocuments.slice(0, limit)
+        documents: normalizedDocuments.slice(0, limit)
       }
     });
   } catch (error) {
