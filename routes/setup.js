@@ -2778,7 +2778,10 @@ router.post('/api/scan/stop', isAuthenticated, async (req, res) => {
 
 async function processDocument(doc, existingTags, existingCorrespondentList, existingDocumentTypesList, ownUserId, customPrompt = null) {
   const isProcessed = await documentModel.isDocumentProcessed(doc.id);
-  if (isProcessed) return null;
+  if (isProcessed) {
+    console.log(`[DEBUG] Document ${doc.id} already in processed_documents — skipping. Remove via Rescan to reprocess.`);
+    return null;
+  }
 
   const isFailed = await documentModel.isDocumentFailed(doc.id);
   if (isFailed) {

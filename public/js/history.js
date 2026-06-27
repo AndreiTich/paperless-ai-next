@@ -367,6 +367,9 @@ class HistoryManager {
         document.getElementById('resetAllBtn')?.addEventListener('click', () => {
             this.showModal(this.confirmModalAll);
         });
+
+        // Rescan Selected button
+        document.getElementById('rescanSelectedBtn')?.addEventListener('click', () => this._handleRescanSelected());
     }
 
     initializeFilters() {
@@ -772,6 +775,37 @@ class HistoryManager {
         } catch (err) {
             console.error('Restore failed:', err);
             this.showToast('Restore failed: ' + err.message, 'error');
+        } finally {
+            if (btn) {
+                btn.disabled  = false;
+                btn.innerHTML = origHtml;
+            }
+        }
+    }
+
+    async _handleRescanSelected() {
+        const ids = this.getSelectedDocuments();
+        if (ids.length === 0) {
+            this.showToast('Please select at least one document to rescan.', 'error');
+            return;
+        }
+
+        const btn = document.getElementById('rescanSelectedBtn');
+        const origHtml = btn?.innerHTML;
+        if (btn) {
+            btn.disabled  = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Rescanning...';
+        }
+
+        try {
+            // 1. Clear local processing records so the documents are eligible again.
+            const ok = await this.resetDocuments(ids);
+            if (!ok) return;
+
+            // 2. Trigger an immediate scan (fire and forget).
+            fetch('/api/scan/now', { method: 'POST' }).catch(() => {});
+
+            this.showToast(`${ids.length} document(s) sent for rescan. It might take a few moments to process.`, 'success');
         } finally {
             if (btn) {
                 btn.disabled  = false;
