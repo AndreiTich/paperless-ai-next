@@ -17,5 +17,10 @@ module.exports = {
     'New: Local OCR providers available for selection in OCR settings',
     'New: Added support for Ollama API token usage metrics in document history',
     'Improvement: Updated base URL validation'
-  ]
+  ],
+  version: 'v2026.07.01',
+  entries: [
+    'Fix: OCR timeout',
+    'Fix: Document handling for re-tagged documents',
+  ],
 };
