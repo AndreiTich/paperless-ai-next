@@ -1143,16 +1143,19 @@ router.get('/api/playground/bootstrap', protectApiRoute, async (req, res) => {
  */
 router.get('/api/chat/documents', isAuthenticated, async (req, res) => {
   try {
-    const query = String(req.query?.q || '').trim().toLowerCase();
+    const query = String(req.query?.q || '').trim();
     const requestedLimit = Number.parseInt(String(req.query?.limit || '100'), 10);
     const limit = Number.isFinite(requestedLimit)
       ? Math.min(Math.max(requestedLimit, 1), 200)
       : 100;
+    const validModes = ['all', 'title', 'tags', 'correspondent'];
+    const mode = validModes.includes(req.query?.mode) ? req.query.mode : 'all';
 
     const {
       documents,
+      tagNames,
       correspondentNames
-    } = await documentsService.getDocumentsWithMetadata(limit);
+    } = await documentsService.getDocumentsWithMetadata(limit, query, mode);
 
     const normalizedDocuments = (Array.isArray(documents) ? documents : []).map((doc) => {
       const correspondentId = Number(doc?.correspondent);
@@ -1160,27 +1163,23 @@ router.get('/api/chat/documents', isAuthenticated, async (req, res) => {
         ? (correspondentNames?.[correspondentId] || '')
         : '';
 
+      const resolvedTags = (Array.isArray(doc?.tags) ? doc.tags : [])
+        .map(id => tagNames?.[id])
+        .filter(Boolean);
+
       return {
         id: doc?.id,
         title: doc?.title || '',
         created: doc?.created || doc?.created_date || doc?.added || null,
-        correspondent: correspondentName
+        correspondent: correspondentName,
+        tags: resolvedTags
       };
     });
-
-    const filteredDocuments = query
-      ? normalizedDocuments.filter((doc) => {
-        const idMatches = String(doc.id || '').includes(query);
-        const titleMatches = String(doc.title || '').toLowerCase().includes(query);
-        const correspondentMatches = String(doc.correspondent || '').toLowerCase().includes(query);
-        return idMatches || titleMatches || correspondentMatches;
-      })
-      : normalizedDocuments;
 
     return res.json({
       success: true,
       data: {
-        documents: filteredDocuments.slice(0, limit)
+        documents: normalizedDocuments.slice(0, limit)
       }
     });
   } catch (error) {
@@ -7741,6 +7740,17 @@ router.get('/api/ocr/queue', isAuthenticated, async (req, res) => {
  *       500:
  *         description: Server error
  */
+
+// API: Get all document IDs currently in the OCR queue
+router.get('/api/ocr/queue/ids', isAuthenticated, async (req, res) => {
+  try {
+    const ids = await documentModel.getOcrQueueDocumentIds();
+    return res.json({ success: true, ids });
+  } catch (error) {
+    console.error('[ERROR] GET /api/ocr/queue/ids:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // API: Add a document manually to OCR queue
 router.post('/api/ocr/queue/add', isAuthenticated, async (req, res) => {
